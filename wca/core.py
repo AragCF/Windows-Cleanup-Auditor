@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 APP_NAME = "Ревизор дискового мусора"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 
 RISK_SAFE = "Безопасно"
 RISK_REBUILD = "Восстанавливаемое"
