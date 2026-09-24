@@ -10,8 +10,17 @@ from wca.scanner import Scanner
 
 
 def default_scan_roots() -> list[str]:
-    system_drive = os.environ.get("SystemDrive", "C:").rstrip("\\")
+    system_drive = os.environ.get("SystemDrive", "C:").strip().strip('"').rstrip("\\/")
     return [system_drive + "\\"]
+
+
+def normalize_scan_root(value: str) -> str:
+    root = value.strip().strip('"')
+    while root.endswith(':"'):
+        root = root[:-1]
+    if len(root) == 2 and root[0].isalpha() and root[1] == ":":
+        return root.upper() + "\\"
+    return os.path.abspath(root)
 
 
 def run_cli(roots: list[str], thorough: bool, min_mb: float, report_dir: str) -> int:
@@ -39,6 +48,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.cli:
         roots = args.root or (get_local_fixed_drives() if args.all_drives else default_scan_roots())
+        roots = [normalize_scan_root(root) for root in roots]
         return run_cli(roots, not args.quick, args.min_mb, args.report_dir)
     run_gui()
     return 0
