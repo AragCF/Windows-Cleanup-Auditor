@@ -75,7 +75,7 @@ def get_local_fixed_drives() -> list[str]:
     result = []
     for i in range(26):
         if mask & (1 << i):
-            root = f"{chr(65 + i)}:\"
+            root = f"{chr(65 + i)}:\\"
             if k32.GetDriveTypeW(ctypes.c_wchar_p(root)) == 3:
                 result.append(root)
     return result

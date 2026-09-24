@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import os
+import threading
+import time
+
+from .core import Candidate, RISK_ORDER, dir_stats, file_stats, has_forbidden_component, is_reparse_or_link, path_on_roots
+from .rules import classify_directory, known_directory_candidates, targeted_file_candidates
+
+PRUNE_DIR_NAMES = {"$recycle.bin", "system volume information", "recovery", "winsxs", "windowsapps", "wpsystem"}
+NEVER_INSIDE_NAMES = {".git", ".svn", ".hg"}
+
+
+class Scanner:
+    def __init__(self, roots: list[str], thorough: bool = True, min_bytes: int = 0, event_cb=None, cancel_event: threading.Event | None = None):
+        self.roots = [os.path.abspath(r) for r in roots]
+        self.thorough = thorough
+        self.min_bytes = min_bytes
+        self.event_cb = event_cb or (lambda *args, **kwargs: None)
+        self.cancel_event = cancel_event or threading.Event()
+        self._candidates: dict[str, Candidate] = {}
+        self._visited_dirs = 0
+        self._errors = 0
+
+    def emit(self, event: str, payload=None):
+        try:
+            self.event_cb(event, payload)
+        except Exception:
+            pass
+
+    def add_candidate(self, path: str, category: str, kind: str, risk: str, reason: str, keep_root: bool = False, source: str = "scan") -> bool:
+        if self.cancel_event.is_set():
+            return False
+        path = os.path.abspath(path)
+        if not path_on_roots(path, self.roots) or not os.path.exists(path):
+            return False
+        if has_forbidden_component(path) or is_reparse_or_link(path):
+            return False
+        key = os.path.normcase(path)
+        for old_key in list(self._candidates):
+            try:
+                common = os.path.commonpath([key, old_key])
+            except ValueError:
+                continue
+            if common == old_key:
+                return False
+            if common == key:
+                del self._candidates[old_key]
+        self.emit("status", f"Подсчёт: {path}")
+        size, files, dirs = dir_stats(path, self.cancel_event) if os.path.isdir(path) else file_stats(path)
+        if size < self.min_bytes:
+            return False
+        c = Candidate(path, category, kind, risk, reason, size, files, dirs, source, keep_root)
+        self._candidates[key] = c
+        self.emit("candidate", c)
+        return True
+
+    def scan_known_locations(self):
+        self.emit("status", "Проверяю известные системные и разработческие места…")
+        for entry in known_directory_candidates() + targeted_file_candidates():
+            if self.cancel_event.is_set():
+                return
+            self.add_candidate(*entry, source="known")
+
+    def _covered(self, path: str) -> bool:
+        p = os.path.normcase(os.path.abspath(path))
+        for key in self._candidates:
+            try:
+                if os.path.commonpath([p, key]) == key:
+                    return True
+            except ValueError:
+                pass
+        return False
+
+    def scan_roots(self):
+        if not self.thorough:
+            return
+        self.emit("status", "Начинаю тщательный обход выбранных дисков…")
+        for root in self.roots:
+            stack = [root]
+            while stack and not self.cancel_event.is_set():
+                current = stack.pop()
+                self._visited_dirs += 1
+                if self._visited_dirs % 250 == 0:
+                    self.emit("progress", {"dirs": self._visited_dirs, "errors": self._errors, "current": current})
+                try:
+                    with os.scandir(current) as it:
+                        for entry in it:
+                            if self.cancel_event.is_set():
+                                break
+                            try:
+                                if not entry.is_dir(follow_symlinks=False):
+                                    continue
+                                low_name = entry.name.lower()
+                                if low_name in PRUNE_DIR_NAMES or low_name in NEVER_INSIDE_NAMES:
+                                    continue
+                                if is_reparse_or_link(entry.path) or self._covered(entry.path):
+                                    continue
+                                cls = classify_directory(entry.path)
+                                if cls and self.add_candidate(entry.path, *cls, source="deep"):
+                                    continue
+                                low = entry.path.lower().replace("/", "\\")
+                                if "\\windows\\servicing" in low or "\\windows\\installer" in low:
+                                    continue
+                                stack.append(entry.path)
+                            except OSError:
+                                self._errors += 1
+                except OSError:
+                    self._errors += 1
+
+    def run(self) -> list[Candidate]:
+        started = time.time()
+        self.scan_known_locations()
+        self.scan_roots()
+        values = sorted(self._candidates.values(), key=lambda c: (RISK_ORDER.get(c.risk, 9), c.category.lower(), -c.size, c.path.lower()))
+        self.emit("done", {"candidates": values, "dirs": self._visited_dirs, "errors": self._errors, "seconds": time.time() - started, "cancelled": self.cancel_event.is_set()})
+        return values

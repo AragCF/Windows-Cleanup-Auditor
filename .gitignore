@@ -1,0 +1,13 @@
+# Local runtime data can contain private paths, usernames and project names.
+logs/
+reports/
+
+# Python runtime files.
+__pycache__/
+*.py[cod]
+
+# Editor/OS noise.
+.DS_Store
+Thumbs.db
+
+# Encrypted reports are intentionally NOT ignored: add only the archives you want to share.
