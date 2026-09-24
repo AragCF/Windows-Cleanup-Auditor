@@ -2,14 +2,88 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
+import shutil
 from pathlib import Path
 
 from .core import (
     CATEGORY_DOTNET, CATEGORY_FLUTTER, CATEGORY_GRADLE, CATEGORY_IDE, CATEGORY_INSTALLERS,
     CATEGORY_IOS, CATEGORY_JAVA, CATEGORY_NODE, CATEGORY_OTHER, CATEGORY_PROJECT,
     CATEGORY_PYTHON, CATEGORY_SYSTEM, RISK_CAUTION, RISK_REBUILD, RISK_SAFE,
-    has_forbidden_component,
+    has_forbidden_component, protected_install_roots,
 )
+
+def _unique_existing_dirs(paths) -> list[str]:
+    result = []
+    seen = set()
+    for value in paths:
+        if not value:
+            continue
+        full = os.path.abspath(str(value))
+        key = os.path.normcase(full)
+        if key in seen or not os.path.isdir(full):
+            continue
+        seen.add(key)
+        result.append(full)
+    return result
+
+
+def android_sdk_roots() -> list[str]:
+    env = os.environ
+    home = env.get("USERPROFILE") or str(Path.home())
+    local = env.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local"))
+    return _unique_existing_dirs([
+        env.get("ANDROID_SDK_ROOT"),
+        env.get("ANDROID_HOME"),
+        os.path.join(local, "Android", "Sdk"),
+    ])
+
+
+def flutter_sdk_roots() -> list[str]:
+    env = os.environ
+    roots = [env.get("FLUTTER_ROOT"), env.get("FLUTTER_HOME")]
+    found = shutil.which("flutter") or shutil.which("flutter.bat")
+    if found:
+        roots.append(str(Path(found).resolve().parent.parent))
+    for sdk in android_sdk_roots():
+        roots.append(os.path.join(sdk, "flutter"))
+    return [
+        root for root in _unique_existing_dirs(roots)
+        if os.path.isfile(os.path.join(root, "bin", "flutter.bat"))
+    ]
+
+
+def deep_scan_prune_roots() -> list[str]:
+    return _unique_existing_dirs(protected_install_roots() + android_sdk_roots() + flutter_sdk_roots())
+
+
+def is_tool_install_root(path: str) -> bool:
+    p = Path(path)
+    name = p.name.lower()
+    try:
+        if name == "flutter" and (p / "bin" / "flutter.bat").is_file():
+            return True
+        if name in {"sdk", "android-sdk", "android_tools", "android-tools"}:
+            markers = sum((p / child).exists() for child in ("platform-tools", "build-tools", "platforms", "cmdline-tools"))
+            if markers >= 2:
+                return True
+        if re.fullmatch(r"python\d+(?:\.\d+)?", name) and (p / "python.exe").is_file() and (p / "Lib").is_dir():
+            return True
+        if name in {"miniconda3", "anaconda3"} and (p / "python.exe").is_file():
+            if (p / "Scripts" / "conda.exe").exists() or (p / "condabin" / "conda.bat").exists():
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def is_backup_tree_path(path: str) -> bool:
+    for part in Path(path).parts:
+        low = part.lower()
+        if low.endswith(".bak") or ".bak." in low:
+            return True
+    return False
+
 
 PROJECT_MARKERS = {
     "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "gradlew", "gradlew.bat",
@@ -133,9 +207,11 @@ def known_directory_candidates() -> list[tuple[str, str, str, str, str, bool]]:
     ]
     pub = env.get("PUB_CACHE") or os.path.join(local, "Pub", "Cache")
     items.append((pub, CATEGORY_FLUTTER, "Pub cache", RISK_REBUILD, "Общий кэш Dart/Flutter", False))
-    sdk_paths = [x for x in (env.get("ANDROID_SDK_ROOT"), env.get("ANDROID_HOME"), os.path.join(local, "Android", "Sdk")) if x]
-    for sdk in dict.fromkeys(sdk_paths):
+    for sdk in android_sdk_roots():
         items.append((os.path.join(sdk, ".temp"), CATEGORY_GRADLE, "Android SDK .temp", RISK_SAFE, "Временные файлы Android SDK Manager", False))
+    for flutter in flutter_sdk_roots():
+        items.append((os.path.join(flutter, "bin", "cache"), CATEGORY_FLUTTER, "Flutter SDK bin\\cache", RISK_REBUILD,
+                      "Кэш Flutter SDK; компоненты будут загружены заново", False))
     return items
 
 
@@ -156,17 +232,8 @@ def targeted_file_candidates() -> list[tuple[str, str, str, str, str, bool]]:
         except OSError:
             pass
 
-    roots = []
-    for key in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
-        if env.get(key):
-            roots.append(Path(env[key]))
-    roots.append(local / "Android" / "Sdk")
-    seen = set()
-    for root in roots:
-        key = os.path.normcase(os.path.abspath(str(root)))
-        if key in seen or not root.is_dir():
-            continue
-        seen.add(key)
+    for root_text in android_sdk_roots():
+        root = Path(root_text)
         try:
             for item in root.iterdir():
                 if item.is_file() and item.suffix.lower() in {".zip", ".7z", ".rar", ".exe", ".msi"}:

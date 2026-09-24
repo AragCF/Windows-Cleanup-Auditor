@@ -28,7 +28,12 @@ def run_cli(roots: list[str], thorough: bool, min_mb: float, report_dir: str) ->
     print("Roots:", ", ".join(roots))
     scanner = Scanner(roots, thorough=thorough, min_bytes=int(min_mb * 1024 * 1024), event_cb=lambda e, p=None: print(p) if e == "status" else None)
     candidates = scanner.run()
-    meta = {"roots": roots, "thorough": thorough, "candidate_count": len(candidates), "candidate_bytes": sum(c.size for c in candidates)}
+    meta = {"roots": roots, "thorough": thorough, "candidate_count": len(candidates),
+            "candidate_bytes": sum(c.size for c in candidates),
+            "visited_dirs": getattr(scanner, "_visited_dirs", 0),
+            "errors": getattr(scanner, "_errors", 0),
+            "aliases_skipped": getattr(scanner, "_alias_skipped", 0),
+            "pruned_dirs": getattr(scanner, "_pruned_dirs", 0)}
     jp, cp = write_report(report_dir, meta, candidates)
     print(f"Found: {len(candidates)}; {human_size(sum(c.size for c in candidates))}")
     print("JSON:", jp)

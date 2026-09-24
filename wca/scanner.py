@@ -4,8 +4,8 @@ import os
 import threading
 import time
 
-from .core import Candidate, RISK_ORDER, dir_stats, file_stats, has_forbidden_component, is_reparse_or_link, path_on_roots
-from .rules import classify_directory, known_directory_candidates, targeted_file_candidates
+from .core import Candidate, RISK_CAUTION, RISK_ORDER, dir_stats, file_stats, has_forbidden_component, is_reparse_or_link, path_is_within, path_on_roots
+from .rules import classify_directory, deep_scan_prune_roots, is_backup_tree_path, is_tool_install_root, known_directory_candidates, targeted_file_candidates
 
 PRUNE_DIR_NAMES = {"$recycle.bin", "system volume information", "recovery", "winsxs", "windowsapps", "wpsystem"}
 NEVER_INSIDE_NAMES = {".git", ".svn", ".hg"}
@@ -21,6 +21,9 @@ class Scanner:
         self._candidates: dict[str, Candidate] = {}
         self._visited_dirs = 0
         self._errors = 0
+        self._alias_skipped = 0
+        self._pruned_dirs = 0
+        self._prune_roots = deep_scan_prune_roots()
 
     def emit(self, event: str, payload=None):
         try:
@@ -37,7 +40,13 @@ class Scanner:
         if has_forbidden_component(path) or is_reparse_or_link(path):
             return False
         key = os.path.normcase(path)
-        for old_key in list(self._candidates):
+        for old_key, old_candidate in list(self._candidates.items()):
+            try:
+                if os.path.samefile(path, old_candidate.path):
+                    self._alias_skipped += 1
+                    return False
+            except OSError:
+                pass
             try:
                 common = os.path.commonpath([key, old_key])
             except ValueError:
@@ -46,10 +55,13 @@ class Scanner:
                 return False
             if common == key:
                 del self._candidates[old_key]
-        self.emit("status", f"Подсчёт: {path}")
+        if source != "deep":
+            self.emit("status", f"Подсчёт: {path}")
         size, files, dirs = dir_stats(path, self.cancel_event) if os.path.isdir(path) else file_stats(path)
         if size < self.min_bytes:
             return False
+        if source == "deep":
+            self.emit("status", f"Найдено: {path}")
         c = Candidate(path, category, kind, risk, reason, size, files, dirs, source, keep_root)
         self._candidates[key] = c
         self.emit("candidate", c)
@@ -71,6 +83,9 @@ class Scanner:
             except ValueError:
                 pass
         return False
+
+    def _pruned(self, path: str) -> bool:
+        return any(path_is_within(path, root) for root in self._prune_roots) or is_tool_install_root(path)
 
     def scan_roots(self):
         if not self.thorough:
@@ -96,9 +111,15 @@ class Scanner:
                                     continue
                                 if is_reparse_or_link(entry.path) or self._covered(entry.path):
                                     continue
-                                cls = classify_directory(entry.path)
-                                if cls and self.add_candidate(entry.path, *cls, source="deep"):
+                                if self._pruned(entry.path):
+                                    self._pruned_dirs += 1
                                     continue
+                                cls = classify_directory(entry.path)
+                                if cls:
+                                    if is_backup_tree_path(entry.path):
+                                        cls = (cls[0], cls[1], RISK_CAUTION, cls[3] + "; объект находится внутри резервной копии")
+                                    if self.add_candidate(entry.path, *cls, source="deep"):
+                                        continue
                                 low = entry.path.lower().replace("/", "\\")
                                 if "\\windows\\servicing" in low or "\\windows\\installer" in low:
                                     continue
@@ -113,5 +134,7 @@ class Scanner:
         self.scan_known_locations()
         self.scan_roots()
         values = sorted(self._candidates.values(), key=lambda c: (RISK_ORDER.get(c.risk, 9), c.category.lower(), -c.size, c.path.lower()))
-        self.emit("done", {"candidates": values, "dirs": self._visited_dirs, "errors": self._errors, "seconds": time.time() - started, "cancelled": self.cancel_event.is_set()})
+        self.emit("done", {"candidates": values, "dirs": self._visited_dirs, "errors": self._errors,
+                           "aliases_skipped": self._alias_skipped, "pruned_dirs": self._pruned_dirs,
+                           "seconds": time.time() - started, "cancelled": self.cancel_event.is_set()})
         return values

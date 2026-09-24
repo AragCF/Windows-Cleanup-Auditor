@@ -4,6 +4,7 @@ import csv
 import ctypes
 import json
 import os
+import re
 import shutil
 import stat
 import threading
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 APP_NAME = "Ревизор дискового мусора"
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 
 RISK_SAFE = "Безопасно"
 RISK_REBUILD = "Восстанавливаемое"
@@ -81,16 +82,52 @@ def get_local_fixed_drives() -> list[str]:
     return result
 
 
-def path_on_roots(path: str, roots: Iterable[str]) -> bool:
+def path_is_within(path: str, root: str) -> bool:
     p = os.path.normcase(os.path.abspath(path))
+    r = os.path.normcase(os.path.abspath(root))
+    try:
+        return os.path.commonpath([p, r]) == r
+    except ValueError:
+        return False
+
+
+def path_on_roots(path: str, roots: Iterable[str]) -> bool:
+    return any(path_is_within(path, root) for root in roots)
+
+
+def protected_install_roots() -> list[str]:
+    env = os.environ
+    home = env.get("USERPROFILE") or str(Path.home())
+    local = env.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local"))
+    programdata = env.get("PROGRAMDATA", r"C:\ProgramData")
+    roots = [
+        env.get("WINDIR"),
+        env.get("ProgramFiles"),
+        env.get("ProgramFiles(x86)"),
+        os.path.join(local, "Programs"),
+        os.path.join(programdata, "miniconda3"),
+        os.path.join(programdata, "anaconda3"),
+        os.path.join(home, "miniconda3"),
+        os.path.join(home, "anaconda3"),
+    ]
+    result = []
+    seen = set()
     for root in roots:
-        r = os.path.normcase(os.path.abspath(root))
-        try:
-            if os.path.commonpath([p, r]) == r:
-                return True
-        except ValueError:
-            pass
-    return False
+        if not root:
+            continue
+        key = os.path.normcase(os.path.abspath(root))
+        if key not in seen:
+            seen.add(key)
+            result.append(os.path.abspath(root))
+    return result
+
+
+def is_protected_installed_path(path: str) -> bool:
+    full = os.path.abspath(path)
+    low = full.lower().replace("/", "\\")
+    if re.match(r"^[a-z]:\\python\d+(?:\.\d+)?(?:\\|$)", low):
+        return True
+    return any(path_is_within(full, root) for root in protected_install_roots())
 
 
 def has_forbidden_component(path: str) -> bool:
@@ -206,6 +243,18 @@ def validate_delete_target(path: str) -> tuple[bool, str]:
     full = os.path.normcase(os.path.abspath(path))
     if full in protected_exact_paths():
         return False, "Защитный запрет на удаление корневого/системного каталога"
+    env = os.environ
+    allowed = {
+        os.path.normcase(os.path.abspath(p))
+        for p in (
+            env.get("TEMP"),
+            env.get("TMP"),
+            os.path.join(env.get("WINDIR", r"C:\Windows"), "Temp"),
+        )
+        if p
+    }
+    if full not in allowed and is_protected_installed_path(path):
+        return False, "Защитный запрет: объект находится внутри установленной программы или системного дерева"
     if has_forbidden_component(path):
         return False, "Защитный запрет: путь внутри системы контроля версий"
     if is_reparse_or_link(path):
