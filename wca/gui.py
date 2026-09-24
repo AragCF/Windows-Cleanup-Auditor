@@ -44,8 +44,11 @@ def run_gui() -> None:
             top.pack(fill="x")
             ttk.Label(top, text="Диски:").grid(row=0, column=0, sticky="w", padx=(0, 8))
             col = 1
-            for drive in self.drives:
-                var = tk.BooleanVar(value=True)
+            system_root = os.environ.get("SystemDrive", "C:").rstrip("\\") + "\\"
+            has_system_root = any(drive.lower() == system_root.lower() for drive in self.drives)
+            for index, drive in enumerate(self.drives):
+                selected_by_default = drive.lower() == system_root.lower() or (index == 0 and not has_system_root)
+                var = tk.BooleanVar(value=selected_by_default)
                 self.drive_vars[drive] = var
                 ttk.Checkbutton(top, text=drive, variable=var).grid(row=0, column=col, sticky="w", padx=4)
                 col += 1
