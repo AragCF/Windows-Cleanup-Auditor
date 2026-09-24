@@ -10,18 +10,34 @@ from .core import (
     CATEGORY_DOTNET, CATEGORY_FLUTTER, CATEGORY_GRADLE, CATEGORY_IDE, CATEGORY_INSTALLERS,
     CATEGORY_IOS, CATEGORY_JAVA, CATEGORY_NODE, CATEGORY_OTHER, CATEGORY_PROJECT,
     CATEGORY_PYTHON, CATEGORY_SYSTEM, RISK_CAUTION, RISK_REBUILD, RISK_SAFE,
-    has_forbidden_component, protected_install_roots,
+    canonical_real_path, has_forbidden_component, path_has_reparse_component, protected_install_roots,
 )
 
 def _unique_existing_dirs(paths) -> list[str]:
+    """Resolve directory aliases to their physical target and return each tree once."""
     result = []
     seen = set()
     for value in paths:
         if not value:
             continue
-        full = os.path.abspath(str(value))
+        original = os.path.abspath(str(value))
+        if not os.path.isdir(original):
+            continue
+        full = canonical_real_path(original) if path_has_reparse_component(original) else original
+        if not os.path.isdir(full):
+            continue
         key = os.path.normcase(full)
-        if key in seen or not os.path.isdir(full):
+        if key in seen:
+            continue
+        duplicate = False
+        for existing in result:
+            try:
+                if os.path.samefile(full, existing):
+                    duplicate = True
+                    break
+            except OSError:
+                pass
+        if duplicate:
             continue
         seen.add(key)
         result.append(full)

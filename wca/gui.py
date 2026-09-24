@@ -191,14 +191,14 @@ def run_gui() -> None:
             self.scan_btn.config(state="normal"); self.stop_btn.config(state="disabled")
             state = "normal" if self.candidates else "disabled"
             self.safe_btn.config(state=state); self.clear_btn.config(state=state); self.delete_btn.config(state=state); self.report_btn.config(state="normal")
-            self.scan_meta.update({"dirs": payload["dirs"], "errors": payload["errors"], "aliases_skipped": payload.get("aliases_skipped", 0), "pruned_dirs": payload.get("pruned_dirs", 0), "seconds": payload["seconds"], "cancelled": payload["cancelled"], "candidate_count": len(self.candidates), "candidate_bytes": sum(c.size for c in self.candidates)})
+            self.scan_meta.update({"dirs": payload["dirs"], "errors": payload["errors"], "aliases_skipped": payload.get("aliases_skipped", 0), "reparse_skipped": payload.get("reparse_skipped", 0), "pruned_dirs": payload.get("pruned_dirs", 0), "seconds": payload["seconds"], "cancelled": payload["cancelled"], "candidate_count": len(self.candidates), "candidate_bytes": sum(c.size for c in self.candidates)})
             report_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports")
             try:
                 write_report(report_dir, self.scan_meta, self.candidates)
             except Exception:
                 pass
             prefix = "Сканирование остановлено" if payload["cancelled"] else "Сканирование завершено"
-            self.status_var.set(f"{prefix}: {len(self.candidates)} объектов, {human_size(sum(c.size for c in self.candidates))}; каталогов {payload['dirs']:,}, отсечено деревьев {payload.get('pruned_dirs', 0):,}, алиасов {payload.get('aliases_skipped', 0):,}, ошибок доступа {payload['errors']:,}.")
+            self.status_var.set(f"{prefix}: {len(self.candidates)} объектов, {human_size(sum(c.size for c in self.candidates))}; каталогов {payload['dirs']:,}, отсечено деревьев {payload.get('pruned_dirs', 0):,}, ссылок/junction {payload.get('reparse_skipped', 0):,}, физических алиасов {payload.get('aliases_skipped', 0):,}, ошибок доступа {payload['errors']:,}.")
 
         def toggle_current(self, event=None):
             iid = self.tree.focus()

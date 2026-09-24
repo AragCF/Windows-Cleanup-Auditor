@@ -4,7 +4,7 @@ import os
 import threading
 import time
 
-from .core import Candidate, RISK_CAUTION, RISK_ORDER, dir_stats, file_stats, has_forbidden_component, is_reparse_or_link, path_is_within, path_on_roots
+from .core import Candidate, RISK_CAUTION, RISK_ORDER, dir_stats, file_stats, has_forbidden_component, is_reparse_or_link, path_has_reparse_component, path_is_within, path_on_roots
 from .rules import classify_directory, deep_scan_prune_roots, is_backup_tree_path, is_tool_install_root, known_directory_candidates, targeted_file_candidates
 
 PRUNE_DIR_NAMES = {"$recycle.bin", "system volume information", "recovery", "winsxs", "windowsapps", "wpsystem"}
@@ -22,6 +22,7 @@ class Scanner:
         self._visited_dirs = 0
         self._errors = 0
         self._alias_skipped = 0
+        self._reparse_skipped = 0
         self._pruned_dirs = 0
         self._prune_roots = deep_scan_prune_roots()
 
@@ -37,7 +38,8 @@ class Scanner:
         path = os.path.abspath(path)
         if not path_on_roots(path, self.roots) or not os.path.exists(path):
             return False
-        if has_forbidden_component(path) or is_reparse_or_link(path):
+        if has_forbidden_component(path) or path_has_reparse_component(path):
+            self._reparse_skipped += 1
             return False
         key = os.path.normcase(path)
         for old_key, old_candidate in list(self._candidates.items()):
@@ -104,12 +106,15 @@ class Scanner:
                             if self.cancel_event.is_set():
                                 break
                             try:
+                                if is_reparse_or_link(entry.path):
+                                    self._reparse_skipped += 1
+                                    continue
                                 if not entry.is_dir(follow_symlinks=False):
                                     continue
                                 low_name = entry.name.lower()
                                 if low_name in PRUNE_DIR_NAMES or low_name in NEVER_INSIDE_NAMES:
                                     continue
-                                if is_reparse_or_link(entry.path) or self._covered(entry.path):
+                                if self._covered(entry.path):
                                     continue
                                 if self._pruned(entry.path):
                                     self._pruned_dirs += 1
@@ -135,6 +140,7 @@ class Scanner:
         self.scan_roots()
         values = sorted(self._candidates.values(), key=lambda c: (RISK_ORDER.get(c.risk, 9), c.category.lower(), -c.size, c.path.lower()))
         self.emit("done", {"candidates": values, "dirs": self._visited_dirs, "errors": self._errors,
-                           "aliases_skipped": self._alias_skipped, "pruned_dirs": self._pruned_dirs,
+                           "aliases_skipped": self._alias_skipped, "reparse_skipped": self._reparse_skipped,
+                           "pruned_dirs": self._pruned_dirs,
                            "seconds": time.time() - started, "cancelled": self.cancel_event.is_set()})
         return values

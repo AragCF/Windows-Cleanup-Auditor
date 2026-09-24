@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 APP_NAME = "Ревизор дискового мусора"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.4"
 
 RISK_SAFE = "Безопасно"
 RISK_REBUILD = "Восстанавливаемое"
@@ -135,14 +135,35 @@ def has_forbidden_component(path: str) -> bool:
 
 
 def is_reparse_or_link(path: str) -> bool:
+    """True for symlinks, junctions and other Windows reparse points."""
     try:
         if os.path.islink(path):
+            return True
+        isjunction = getattr(os.path, "isjunction", None)
+        if isjunction is not None and isjunction(path):
             return True
         attrs = getattr(os.lstat(path), "st_file_attributes", 0)
         flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         return bool(attrs & flag)
     except OSError:
         return False
+
+
+def path_has_reparse_component(path: str) -> bool:
+    """Reject not only a link itself, but any path that passes through one."""
+    try:
+        current = Path(os.path.abspath(path))
+        for item in (current, *current.parents):
+            if is_reparse_or_link(str(item)):
+                return True
+    except (OSError, RuntimeError):
+        return True
+    return False
+
+
+def canonical_real_path(path: str) -> str:
+    """Return the physical target path without keeping a junction/symlink alias."""
+    return os.path.abspath(os.path.realpath(os.path.abspath(path)))
 
 
 def dir_stats(path: str, cancel: threading.Event | None = None) -> tuple[int, int, int]:
@@ -158,7 +179,7 @@ def dir_stats(path: str, cancel: threading.Event | None = None) -> tuple[int, in
                     if cancel and cancel.is_set():
                         break
                     try:
-                        if entry.is_symlink():
+                        if is_reparse_or_link(entry.path):
                             continue
                         if entry.is_file(follow_symlinks=False):
                             files += 1
@@ -253,6 +274,8 @@ def validate_delete_target(path: str) -> tuple[bool, str]:
         )
         if p
     }
+    if path_has_reparse_component(path):
+        return False, "Защитный запрет: путь проходит через символическую ссылку, junction или другую точку повторного разбора"
     if full not in allowed and is_protected_installed_path(path):
         return False, "Защитный запрет: объект находится внутри установленной программы или системного дерева"
     if has_forbidden_component(path):

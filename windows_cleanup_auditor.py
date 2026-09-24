@@ -33,10 +33,11 @@ def run_cli(roots: list[str], thorough: bool, min_mb: float, report_dir: str) ->
             "visited_dirs": getattr(scanner, "_visited_dirs", 0),
             "errors": getattr(scanner, "_errors", 0),
             "aliases_skipped": getattr(scanner, "_alias_skipped", 0),
+            "reparse_skipped": getattr(scanner, "_reparse_skipped", 0),
             "pruned_dirs": getattr(scanner, "_pruned_dirs", 0)}
     jp, cp = write_report(report_dir, meta, candidates)
     print(f"Found: {len(candidates)}; {human_size(sum(c.size for c in candidates))}")
-    print(f"Visited dirs: {getattr(scanner, '_visited_dirs', 0):,}; pruned trees: {getattr(scanner, '_pruned_dirs', 0):,}; aliases skipped: {getattr(scanner, '_alias_skipped', 0):,}; access errors: {getattr(scanner, '_errors', 0):,}")
+    print(f"Visited dirs: {getattr(scanner, '_visited_dirs', 0):,}; pruned trees: {getattr(scanner, '_pruned_dirs', 0):,}; reparse links skipped: {getattr(scanner, '_reparse_skipped', 0):,}; physical aliases skipped: {getattr(scanner, '_alias_skipped', 0):,}; access errors: {getattr(scanner, '_errors', 0):,}")
     print("JSON:", jp)
     print("CSV:", cp)
     print("CLI mode does not delete anything.")
