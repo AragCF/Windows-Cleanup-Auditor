@@ -9,6 +9,11 @@ from wca.gui import run_gui
 from wca.scanner import Scanner
 
 
+def default_scan_roots() -> list[str]:
+    system_drive = os.environ.get("SystemDrive", "C:").rstrip("\\")
+    return [system_drive + "\\"]
+
+
 def run_cli(roots: list[str], thorough: bool, min_mb: float, report_dir: str) -> int:
     print(f"{APP_NAME} {APP_VERSION}")
     print("Roots:", ", ".join(roots))
@@ -27,12 +32,14 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=f"{APP_NAME} {APP_VERSION}")
     parser.add_argument("--cli", action="store_true")
     parser.add_argument("--root", action="append")
+    parser.add_argument("--all-drives", action="store_true")
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--min-mb", type=float, default=1.0)
     parser.add_argument("--report-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports"))
     args = parser.parse_args(argv)
     if args.cli:
-        return run_cli(args.root or get_local_fixed_drives(), not args.quick, args.min_mb, args.report_dir)
+        roots = args.root or (get_local_fixed_drives() if args.all_drives else default_scan_roots())
+        return run_cli(roots, not args.quick, args.min_mb, args.report_dir)
     run_gui()
     return 0
 
