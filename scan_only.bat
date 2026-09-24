@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "PY_CMD="
@@ -19,7 +19,18 @@ if not defined PY_CMD (
 if not exist "logs" mkdir "logs"
 if not exist "reports" mkdir "reports"
 
-%PY_CMD% "%~dp0windows_cleanup_auditor.py" --cli
+set "ROOT_ARG=%~1"
+if not defined ROOT_ARG set "ROOT_ARG=%SystemDrive%"
+
+if /I "!ROOT_ARG!"=="ALL" (
+  echo Scan mode: all fixed drives
+  %PY_CMD% "%~dp0windows_cleanup_auditor.py" --cli --all-drives
+) else (
+  if "!ROOT_ARG:~-1!"==":" set "ROOT_ARG=!ROOT_ARG!\"
+  echo Scan root: !ROOT_ARG!
+  %PY_CMD% "%~dp0windows_cleanup_auditor.py" --cli --root "!ROOT_ARG!"
+)
+
 set "RC=%ERRORLEVEL%"
 echo.
 echo Exit code: %RC%
